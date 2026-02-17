@@ -117,5 +117,13 @@ movement = movement.rename(columns = {'timestamp': 'End'})
 movement['Activity'] = 'moving'
 movement['Duration_(Seconds)'] = (movement['End'] - movement['Start']).dt.total_seconds()
 
+activities['group'] = (activities['Activity'] != activities['Activity'].shift()).cumsum()
+
+activities = activities.groupby(['group', 'Activity']).agg(
+    Start=('Start', 'first'),
+    End=('End', 'last'),
+    Value_Sum=('Duration_(Seconds)', 'sum')
+).reset_index().drop(columns='group')
+
 output_path = 'activities.csv'
 activities.to_csv(output_path)
