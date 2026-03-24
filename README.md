@@ -1,6 +1,12 @@
 # Interpreting Sensor Data with AI Agents
 Using open source llms, we can interpret sensor data to create summaries. Careful prompt engineering leads to more consistent results, and rules like "answer in tabular format" allow us to capture and interpret output.
 
+```
+format = '|Activity|Start Time|End Time|Duration|Notes|'
+system_prompt = f"""You are a data scientist tasked with interpreting home sensor data from sensors placed around a subject's house.
+                    Provide your answers in the following tabular format for easy parsing: {format}"""
+```
+
 # Prerequisites
 We need cleaned data to best make use of the agent. Cleaned data helps the AI produce more accurate summaries and improves stability
 
