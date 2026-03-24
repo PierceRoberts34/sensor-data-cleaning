@@ -1,7 +1,11 @@
 # Interpreting Sensor Data with AI Agents
-Using open source llms, we can interpret sensor data and create summaries of data. We use prompt engineering to get the best possible results. Rules like "answer in tabular format" allow us to capture the result of the prompt in our code.
+Using open source llms, we can interpret sensor data to create summaries. Careful prompt engineering leads to more consistent results, and rules like "answer in tabular format" allow us to capture and interpret output.
 
 # Prerequisites
-We need cleaned data to best make use of the agent. Cleaned data helps the AI produce more accurate summaries and more stable results. 
+We need cleaned data to best make use of the agent. Cleaned data helps the AI produce more accurate summaries and improves stability
+
 # Usage
 Select a time window size. Larger time windows require more memory and risk information being ommitted in the summary, but smaller windows will take additional time to process since the prompt needs to be re-run every time.
+
+# Current Results
+Noise in the data seems to be confusing the llm. Specific training on sensor output may be needed to improve performance
