@@ -10,5 +10,6 @@ dependencies = [
     "numpy>=2.4.4",
     "ollama>=0.6.1",
     "pandas>=3.0.2",
+    "pyarrow>=23.0.1",
     "pydantic>=2.12.5",
 ]
