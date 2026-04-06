@@ -1,33 +1,66 @@
-import duckdb
-import io
+import json
 import time
+from typing import Literal
+
+import duckdb
+import numpy as np
+import pandas as pd
 from ollama import chat, create
 from pydantic import BaseModel, ValidationError
-import pandas as pd
-import numpy as np
-from typing import Literal
 
 from environment import EnvVars
 
 rawdata = EnvVars.CSV_SENSOR_DATA_PATH
+metadata_file = EnvVars.SENSOR_METADATA_PATH
+appliance_use_data = EnvVars.CSV_APPLIANCE_DATA_PATH
+cleaned_data = EnvVars.CLEANED_CSV_DATA_PATH 
 parquet_data = EnvVars.PARQUET_SENSOR_DATA_PATH
+
 
 # Define the output structure with Pydantic
 # This restricts the llm's responses
 class ResponseFormat(BaseModel):
     flag: Literal['FLAG', 'NO_FLAG']
 
+# Clean the data for analysis
 def prepareData():
+    # Import data from filesystem and set headers
     colnames = ['status', 'date', 'time', 'sensor']
     df = pd.read_csv(rawdata, header=None, names=colnames)
-
-    # We will clean the data and assign probabilities to sensor readings using a markov model
 
     # Remove unlabeled sensors (noise) from the dataset
     df = df[df['sensor']!='YYY']
 
-    # Remove the first 7 rows since their time is out-of-sequence
-    df = df.iloc[7:]
+    # Convert to Datetime
+    df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'])
+    
+    # Sorting for Time-Series Analysis
+    df = df.sort_values(by=['timestamp', 'sensor'])
+
+    # Fix Sensor Jitter (Debouncing)
+    # If a sensor triggers again within 2 seconds, we treat it as noise/redundancy.
+    df['time_diff'] = df.groupby('sensor')['timestamp'].diff().dt.total_seconds()
+    df = df[~((df['time_diff'] < 2) & (df['time_diff'] >= 0))]
+    df = df.drop(columns=['time_diff', 'date', 'time'])
+
+    # Open the file and load its contents
+    with open(metadata_file, 'r', encoding='utf-8') as file:
+        metadata = json.load(file)
+
+    # Set vibration sensor delays based on the metadata
+    for sensor, info in metadata['vibration'].items():
+        delay = info['Delay']
+        df.loc[df['sensor'] == sensor, 'timestamp'] -= pd.Timedelta(seconds=delay)
+    
+    # Export appliance usage and motion/presence sensors to seperate files
+    df[df['sensor'].isin(metadata['appliances'])].to_csv(appliance_use_data)
+    df[~df['sensor'].isin(metadata['appliances'])].to_csv(cleaned_data)
+    return None
+
+# Assign probabilities to sensor readings using a markov model
+def markovProb():
+    # Import data from filesystem
+    df = pd.read_csv(cleaned_data)
 
     # Determine next reading
     df['next_sensor'] = df['sensor'].shift(-1)
@@ -73,6 +106,8 @@ def get_decision(row):
 def main():
     # Prepare the data
     prepareData()
+    # Compute the markov probabilities
+    markovProb()
 
     # Create a custom model for ease of prompting
     system_prompt = f"""
