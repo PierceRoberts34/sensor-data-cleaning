@@ -1,6 +1,7 @@
+from datetime import datetime
 import json
 import time
-from typing import Literal
+from typing import List
 
 import duckdb
 import numpy as np
@@ -17,10 +18,15 @@ cleaned_data = EnvVars.CLEANED_CSV_DATA_PATH
 parquet_data = EnvVars.PARQUET_SENSOR_DATA_PATH
 
 
+class Decision(BaseModel):
+    row_id: int
+    reasoning: str
+    is_severe: bool
+
 # Define the output structure with Pydantic
 # This restricts the llm's responses
 class ResponseFormat(BaseModel):
-    flag: Literal['FLAG', 'NO_FLAG']
+    decisions: List[Decision]
 
 # Clean the data for analysis
 def prepareData():
@@ -53,8 +59,8 @@ def prepareData():
         df.loc[df['sensor'] == sensor, 'timestamp'] -= pd.Timedelta(seconds=delay)
     
     # Export appliance usage and motion/presence sensors to seperate files
-    df[df['sensor'].isin(metadata['appliances'])].to_csv(appliance_use_data)
-    df[~df['sensor'].isin(metadata['appliances'])].to_csv(cleaned_data)
+    df[df['sensor'].isin(metadata['appliances'])].to_csv(appliance_use_data, index=False)
+    df[~df['sensor'].isin(metadata['appliances'])].to_csv(cleaned_data, index=False)
     return None
 
 # Assign probabilities to sensor readings using a markov model
@@ -83,25 +89,32 @@ def markovProb():
     print(f"DataFrame written to Parquet in {end_time - start_time:.2f} seconds")
     return None
 
-def anomalyFlag(data):
-    response = chat('data-agent', 
-                    messages=[
-                        {'role': 'user', 'content': f"{data}"}
-                    ],
-                    format=ResponseFormat.model_json_schema())
-    return response
+def anomalyFlag(df, batch_size=10):
+    df = df.reset_index().rename(columns={'index': 'row_id'})
+    results = {}
 
-def get_decision(row):
-    # Only process if it's an anomaly
-    if row["anomaly"] == 1:
+    for i in range(0, len(df), batch_size):
+        chunk = df.iloc[i : i + batch_size]
+        chunk_json = chunk[['row_id', 'timestamp', 'status', 'sensor', 'anomaly']].to_json(orient='records')
+        
+        response = chat('data-agent', 
+                        messages=[{'role': 'user', 'content': chunk_json}],
+                        format=ResponseFormat.model_json_schema())
+        
         try:
-            response = anomalyFlag(row)
-            decision = ResponseFormat.model_validate_json(response.message.content)
-            return decision.flag
-        except (ValidationError) as e:
-            print(f"Error: {e}")
-            return 'FLAG'
-    return None
+            output = ResponseFormat.model_validate_json(response.message.content)
+            for item in output.decisions:
+                results[item.row_id] = {
+                    'is_severe': item.is_severe,
+                    'reason': item.reasoning
+                }
+
+        except Exception as e:
+            print(f"Error at batch {i}: {e}")
+    df['is_severe'] = df['row_id'].map(lambda x: results.get(x, {}).get('is_severe', False))
+    df['reasoning'] = df['row_id'].map(lambda x: results.get(x, {}).get('reason', 'No reason provided'))
+
+    return df
 
 def main():
     # Prepare the data
@@ -110,30 +123,32 @@ def main():
     markovProb()
 
     # Create a custom model for ease of prompting
-    system_prompt = f"""
-                    You are a data scientist tasked with interpreting data from sensors placed around a subject's house. 
-                    You are tasked with detecting anomalies in the data.
-                        Decision rules:
-                            - NO_FLAG: noise, ordinary activity
-                            - FLAG: severe or ambiguous anomaly
-                """
+    system_prompt = """
+    You are a sensor data expert. Analyze these events for anomalies.
+    The 'anomaly' field (1=potential, 0=normal) is a Markov-based suggestion.
+    Refine this:
+    - Flag (true) if the sequence is physically impossible or indicates a safety risk.
+    - Ignore (false) if it looks like sensor bounce or common noise.
+
+    Return your answer as a JSON object with 'decisions' containing 'row_id', 'is_severe', and 'reasoning' (only if severe).
+    """
     create(model='data-agent', from_=EnvVars.LLM_MODEL, system=system_prompt)
 
     db = duckdb.connect()
     db.execute(f"CREATE VIEW subject1 AS SELECT * FROM read_parquet('{parquet_data }')")
 
-    query = f"SELECT * FROM subject1 LIMIT 1000" # Limit results for testing purposes
+    query = f"SELECT * FROM subject1 LIMIT 10" # Limit results for testing purposes
     df = db.execute(query).df()
     db.close()
 
     # Apply the function and create/update the column
     start_time = time.time()
-    df['decision_flag'] = df.apply(get_decision, axis=1)
+    df = anomalyFlag(df, batch_size=2)
+    
     end_time = time.time()
     print(f"All anomalies reviewed in {end_time - start_time:.2f} seconds")
 
-    print(df[df['decision_flag']=='FLAG'])
-    df.to_csv(EnvVars.ANOMALY_DATA_PATH)
+    df.to_csv(EnvVars.ANOMALY_DATA_PATH, index=False)
 
 
 if __name__ == "__main__":
