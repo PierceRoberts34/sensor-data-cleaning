@@ -1,6 +1,8 @@
 # Multimodal Anomaly Detection with LLMs
 By combining a relatively simple anomaly detection method, with a lightweight large language model, we can create an anomaly detection system which helps reduce the odds of a false positive. Multimodal detection also reduces computational overhead as the data is reduced by the more rapid first detection pass. A multimodal system works well with live deployments and continuous data streams.
 
+Markov was selected as it is better suited to anomaly detection in timeseries data compared to isolation forest, since isolation forest ignores temporal correlation.
+
 ## Incorporating LLMs into Data Streams
 LLMs have the ability to explain issues in natural language, but are poor at processing large quantities of data. Marking anomalies in advance to reduce the workload and then asking the algorithm to explain the anomaly in natural languages gives data scientists a starting point for tracing issues. 
 
