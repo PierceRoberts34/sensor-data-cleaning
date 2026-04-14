@@ -1,13 +1,12 @@
-from datetime import datetime
 import json
 import time
-from typing import List
 
 import duckdb
-import numpy as np
+from matplotlib import pyplot as plt
 import pandas as pd
-from ollama import chat, create
-from pydantic import BaseModel, ValidationError
+from ollama import generate
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import LabelEncoder
 
 from environment import EnvVars
 
@@ -17,21 +16,10 @@ appliance_use_data = EnvVars.CSV_APPLIANCE_DATA_PATH
 cleaned_data = EnvVars.CLEANED_CSV_DATA_PATH 
 parquet_data = EnvVars.PARQUET_SENSOR_DATA_PATH
 
-
-class Decision(BaseModel):
-    row_id: int
-    reasoning: str
-    is_severe: bool
-
-# Define the output structure with Pydantic
-# This restricts the llm's responses
-class ResponseFormat(BaseModel):
-    decisions: List[Decision]
-
 # Clean the data for analysis
 def prepareData():
     # Import data from filesystem and set headers
-    colnames = ['status', 'date', 'time', 'sensor']
+    colnames = ['event', 'date', 'time', 'sensor']
     df = pd.read_csv(rawdata, header=None, names=colnames)
 
     # Remove unlabeled sensors (noise) from the dataset
@@ -64,10 +52,7 @@ def prepareData():
     return None
 
 # Assign probabilities to sensor readings using a markov model
-def markovProb():
-    # Import data from filesystem
-    df = pd.read_csv(cleaned_data)
-
+def markovProb(df):
     # Determine next reading
     df['next_sensor'] = df['sensor'].shift(-1)
 
@@ -75,12 +60,41 @@ def markovProb():
     df = df.dropna(subset=['next_sensor'])
 
     # Determine the markov probability
-    df['markov_prob'] = df.groupby('sensor')['next_sensor'].transform(
+    markov_prob = df.groupby('sensor')['next_sensor'].transform(
         lambda x: x.map(x.value_counts(normalize=True))
     )
+    return markov_prob
 
-    # Mark values lower than anomaly threshold
-    df['anomaly'] = [1 if x <= 0.05 else 0 for x in df['markov_prob']]
+# Determine iforest probability
+def iforestProb(df):
+
+    # Encode categorical strings to integers
+    le_event = LabelEncoder()
+    le_sensor = LabelEncoder()
+
+    df['Event_Enc'] = le_event.fit_transform(df['event'])
+    df['Sensor_Enc'] = le_sensor.fit_transform(df['sensor'])
+
+    df['Time_Sec'] = pd.to_datetime(df['timestamp']).astype(int)/ 10**9
+    # Create feature array (X)
+    X = df[['Time_Sec', 'Event_Enc', 'Sensor_Enc']].values
+
+    # window_size: how many points to keep in the ensemble
+    # n_estimators: number of trees
+    model = IsolationForest(n_estimators=100)
+
+    # Higher scores indicate higher anomaly probability
+    model.fit(X)
+    scores = model.decision_function(X)
+
+    return scores
+
+def getScores():
+    df = pd.read_csv(cleaned_data)
+
+    # Calculate probabilities
+    df['markov_prob'] = markovProb(df)
+    df['iforest_score'] = iforestProb(df)
 
     # Save the result
     start_time = time.time()
@@ -89,66 +103,87 @@ def markovProb():
     print(f"DataFrame written to Parquet in {end_time - start_time:.2f} seconds")
     return None
 
-def anomalyFlag(df, batch_size=10):
-    df = df.reset_index().rename(columns={'index': 'row_id'})
-    results = {}
-
-    for i in range(0, len(df), batch_size):
-        chunk = df.iloc[i : i + batch_size]
-        chunk_json = chunk[['row_id', 'timestamp', 'status', 'sensor', 'anomaly']].to_json(orient='records')
-        
-        response = chat('data-agent', 
-                        messages=[{'role': 'user', 'content': chunk_json}],
-                        format=ResponseFormat.model_json_schema())
-        
-        try:
-            output = ResponseFormat.model_validate_json(response.message.content)
-            for item in output.decisions:
-                results[item.row_id] = {
-                    'is_severe': item.is_severe,
-                    'reason': item.reasoning
-                }
-
-        except Exception as e:
-            print(f"Error at batch {i}: {e}")
-    df['is_severe'] = df['row_id'].map(lambda x: results.get(x, {}).get('is_severe', False))
-    df['reasoning'] = df['row_id'].map(lambda x: results.get(x, {}).get('reason', 'No reason provided'))
-
-    return df
-
 def main():
     # Prepare the data
     prepareData()
-    # Compute the markov probabilities
-    markovProb()
 
-    # Create a custom model for ease of prompting
-    system_prompt = """
-    You are a sensor data expert. Analyze these events for anomalies.
-    The 'anomaly' field (1=potential, 0=normal) is a Markov-based suggestion.
-    Refine this:
-    - Flag (true) if the sequence is physically impossible or indicates a safety risk.
-    - Ignore (false) if it looks like sensor bounce or common noise.
-
-    Return your answer as a JSON object with 'decisions' containing 'row_id', 'is_severe', and 'reasoning' (only if severe).
-    """
-    create(model='data-agent', from_=EnvVars.LLM_MODEL, system=system_prompt)
+    getScores()
 
     db = duckdb.connect()
-    db.execute(f"CREATE VIEW subject1 AS SELECT * FROM read_parquet('{parquet_data }')")
-
-    query = f"SELECT * FROM subject1 LIMIT 10" # Limit results for testing purposes
-    df = db.execute(query).df()
+    df = db.execute(f" SELECT timestamp, markov_prob, iforest_score FROM read_parquet('{parquet_data }') ORDER BY timestamp ASC").df()
     db.close()
 
-    # Apply the function and create/update the column
-    start_time = time.time()
-    df = anomalyFlag(df, batch_size=2)
-    
-    end_time = time.time()
-    print(f"All anomalies reviewed in {end_time - start_time:.2f} seconds")
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df.set_index('timestamp', inplace=True)
 
-    df.to_csv(EnvVars.ANOMALY_DATA_PATH, index=False)
+    groups = [group for _, group in df.groupby(pd.Grouper(freq='24h')) if not group.empty]
+    if len(groups) < 2:
+            print("Not enough 24-hour periods to perform a comparison.")
+            return
+
+    max_periods = 30
+    # Keep only the last 'max_periods' to ensure the final image is readable
+    plot_groups = groups[-max_periods:]
+    n_plots = len(plot_groups)
+
+    # Create the combined tiled image
+    print(f"Generating a single combined plot for the last {n_plots} periods...")
+    fig, axes = plt.subplots(nrows=n_plots, ncols=1, figsize=(10, 2.5 * n_plots), sharey=True)
+    
+    # Handle the edge case where subplots returns a single Axes object instead of an array
+    if n_plots == 2:
+        axes = axes.flatten()
+
+    for i, group in enumerate(plot_groups):
+        ax = axes[i]
+        is_recent = (i == n_plots - 1) # The very last item in the list
+        
+        # Visual anchors for the LLM
+        line_color = 'red' if is_recent else 'blue'
+        line_width = 2.0 if is_recent else 1.0
+        title = f"MOST RECENT 24H ({group.index[0].strftime('%Y-%m-%d')})" if is_recent else f"Historical Baseline ({group.index[0].strftime('%Y-%m-%d')})"
+        
+        ax.plot(group.index, group['markov_prob'], color=line_color, linewidth=line_width, alpha=0.9)
+        
+        ax.set_title(title, fontweight='bold' if is_recent else 'normal')
+        ax.set_ylabel("Markov Prob")
+        ax.grid(True, linestyle='--', alpha=0.4)
+        
+        # Clean up X-axis to only show hours/minutes so it doesn't clutter
+        ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%H:%M'))
+
+    plt.tight_layout()
+    combined_image_path = "./data/markov_analysis.png"
+    plt.savefig(combined_image_path, dpi=150)
+    plt.close()
+
+    # 4. Prompt the Local Multimodal LLM
+    print("Feeding combined image to local llm...")
+    
+    # The prompt explicitly references our layout and color-coding
+    prompt_text = (
+        "Attached is a single image containing multiple stacked charts showing probability scores over time. "
+        "The top charts (in blue) show historical 24-hour baseline periods. "
+        "The bottom chart (in red) shows the most recent 24-hour period. "
+        "Compare the overall shape, volatility, and magnitude of spikes in the historical baselines to the most recent period. "
+        "Is the most recent period significantly different from the historical baselines? Explain your reasoning based strictly on the visual patterns."
+    )
+    start_time = time.time()
+    try:
+        response = generate(
+            model=EnvVars.LLM_MODEL,
+            prompt=prompt_text,
+            images=[combined_image_path] 
+        )
+        
+        print("\n=== LLM Analysis ===")
+        print(response['response'])
+        print("====================")
+        
+    except Exception as e:
+        print(f"Error communicating with Ollama: {e}")
+    end_time = time.time()
+    print(f"Review complete in {end_time - start_time:.2f} seconds")
 
 
 if __name__ == "__main__":
