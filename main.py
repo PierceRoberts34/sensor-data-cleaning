@@ -154,13 +154,7 @@ def probabilitySignal(signal):
 
     return outputPath
 
-def main():
-    # Prepare the data
-    prepareData()
-
-    getScores()
-    markovPath = probabilitySignal('markov_prob')
-
+def promptLLM(imagePath):
     # Prompt the Local Multimodal LLM
     print("Feeding combined image to local llm...")
     
@@ -177,7 +171,7 @@ def main():
         response = generate(
             model=EnvVars.LLM_MODEL,
             prompt=prompt_text,
-            images=[markovPath] 
+            images=[imagePath] 
         )
         
         print("\n=== LLM Analysis ===")
@@ -188,6 +182,22 @@ def main():
         print(f"Error communicating with Ollama: {e}")
     end_time = time.time()
     print(f"Review complete in {end_time - start_time:.2f} seconds")
+    return None
+
+def main():
+    # Prepare the data
+    prepareData()
+
+    # Calculate Likelihood Functions
+    getScores()
+
+    # Generate graphs for analysis
+    markovPath = probabilitySignal('markov_prob')
+    iforestPath = probabilitySignal('iforest_score')
+
+    # Prompt multimodal llm with likelihood signal
+    promptLLM(markovPath)
+    promptLLM(iforestPath)
 
 
 if __name__ == "__main__":
