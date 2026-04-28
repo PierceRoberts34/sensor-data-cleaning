@@ -8,7 +8,7 @@ We use a hybrid approach that combines isolation forest and markov anomaly detec
 Run `uv sync` to create a virtual environment with the required packages in the working directory.
 
 ### Pip
-Create a virtual environment in the code directory and run `pip install .`
+Create a virtual environment in the code directory. From inside the virtual environment, run `pip install .`
 
 ## Getting Started
 Download and install Ollama, and use the CLI to download the desired llm model. We selected a low-parameter version of Qwen3-VL (qwen3-vl:2b). Fill out the `.env` file. Parameter count and model choice will depend on deployment.
