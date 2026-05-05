@@ -92,15 +92,12 @@ def highlightAnomalies():
     print(anomalies)
 '''
 
-def probabilitySignal(signal, threshold, bound='upper'):
+def probabilitySignal(signal, threshold):
     db = duckdb.connect()
     # Get Data
     df = db.execute(f"SELECT start_time, {signal} FROM read_parquet('{parquet_data }') ORDER BY start_time ASC").df()
     # Get labels for potential anomalies
-    if bound == 'lower':
-        anomalies = db.execute(f"SELECT start_time, {signal} FROM read_parquet('{parquet_data }') WHERE {signal} > {threshold} ORDER BY start_time ASC").df()
-    else:
-        anomalies = db.execute(f"SELECT start_time, {signal} FROM read_parquet('{parquet_data }') WHERE {signal} < {threshold} ORDER BY start_time ASC").df()
+    anomalies = db.execute(f"SELECT start_time, {signal} FROM read_parquet('{parquet_data }') WHERE {signal} < {threshold} ORDER BY start_time ASC").df()
     db.close()
 
     df['start_time'] = pd.to_datetime(df['start_time'])
@@ -194,10 +191,11 @@ def main():
 
     # Create graph of last 30 days
     markovPath = probabilitySignal('markov_prob', 0.01)
+    iforestPath = probabilitySignal('iforest_score', -0.15)
 
     # Prompt multimodal llm with probability
     promptLLM(markovPath)
-    #promptLLM(iforestPath)
+    promptLLM(iforestPath)
 
 
 if __name__ == "__main__":
