@@ -18,6 +18,6 @@ Download and install Ollama, and use the CLI to download the desired llm model. 
 SENSOR_METADATA_PATH=./path/to/sensor/metadata.json
 CSV_SENSOR_DATA_PATH=./path/to/sensor/metadata.csv
 LLM_MODEL=qwen3-vl:2b
-ANOMALY_DATA_PATH=./path/to/output.csv
+ANOMALY_REPORT_FOLDER=./path/to/output.csv
 GRAPH_OUTPUT_FOLDER=./path/to/graph/folder/
 ```
