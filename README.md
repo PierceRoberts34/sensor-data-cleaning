@@ -1,7 +1,13 @@
 # Multimodal Anomaly Detection with LLMs
 In contrast to text-only large language models, multimodal large language models are designed to handle different forms of input, such as image and voice data. For timeseries data, vision-based approaches have shown strong potential compared to text-only representation. We leverage the ability of multimodal llms to process images and interpret the result in natural language to create an anomaly detection system.
 
-We use a hybrid approach that combines isolation forest and markov anomaly detection algorithms. Isolation forests are good at spotting single-point deviations from the norm (e.g. the subject is in the kitchen in the middle of the night) while markov models are best for spotting unusual sequences (e.g. the subject goes directly to bed without eating). By creating numerical representations of the data, we can then convert our data into images which can be interpreted by the llm. Our approach is to create graphics of 24 hour periods, then check the most recent graph against the prior data. This approach is lightweight and processes large quantities of data rapidly, whereas an approach where the llm interacted with the data in tabular form would be much more intensive and prone to instability.
+We use a hybrid approach that combines isolation forest and markov anomaly detection algorithms. Isolation forests are good at spotting single-point deviations from the norm (e.g. the subject is in the kitchen in the middle of the night) while markov models are best for spotting unusual sequences (e.g. the subject goes directly to bed without eating). By creating numerical representations of the data, we can then convert our data into images which can be interpreted by the llm. Our approach is to create graphics of the last 30 24 hour periods, then ask the llm to determine whether any image in the sequence appears different from the others. This approach is lightweight and processes large quantities of data rapidly, whereas an approach where the llm interacted with the data in tabular form would be much more intensive and prone to instability.
+
+### Markov
+Markov is an unsupervised anomaly detection approach for finding unusual patterns in sequential data. Low-likelihood state transitions are marked anomalous.
+
+### IForest
+Isolation Forest is an unsupervised anomaly detection algorithm. Our model uses cyclical encoding to represent time of day as a feature, paired with the information about the sensor itself.
 
 ## Installing Requirements
 ### UV (Preferred)
